@@ -3,10 +3,12 @@ from operator import or_
 
 from django.template import Node, Variable, Context, loader
 from django.db import models
+from django.core.exceptions import FieldError
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.auth.models import AnonymousUser, User
 from django.db.models import Q
 
+from tendenci.apps.user_groups.models import Group
 from tendenci.core.perms.utils import get_query_filters
 
 
@@ -23,7 +25,8 @@ def parse_tag_kwargs(bits):
 
     for bit in bits:
         if '=' in bit:
-            key, value = bit.split('=')
+            key = bit.split("=", 1)[0]
+            value = bit.split("=", 1)[1]
             kwargs[key] = value
 
     return kwargs
@@ -60,6 +63,8 @@ class ListNode(Node):
         order = u''
         exclude = u''
         randomize = False
+        group = u''
+        status_detail = u'active'
 
         if 'random' in self.kwargs:
             randomize = bool(self.kwargs['random'])
@@ -121,6 +126,25 @@ class ListNode(Node):
             exclude = exclude.replace('"', '')
             exclude = exclude.split(',')
 
+        if 'group' in self.kwargs:
+            try:
+                group = Variable(self.kwargs['group'])
+                group = unicode(group.resolve(context))
+            except:
+                group = self.kwargs['group']
+
+            try:
+                group = int(group)
+            except:
+                group = None
+
+        if 'status_detail' in self.kwargs:
+            try:
+                status_detail = Variable(self.kwargs['status_detail'])
+                status_detail = status_detail.resolve(context)
+            except:
+                status_detail = self.kwargs['status_detail']
+
         # get the list of items
         self.perms = getattr(self, 'perms', unicode())
 
@@ -150,6 +174,12 @@ class ListNode(Node):
                 tag_queries += [Q(tags__icontains="," + t.strip() + ",") for t in tags]
                 tag_query = reduce(or_, tag_queries)
                 items = items.filter(tag_query)
+
+            if hasattr(self.model, 'group') and group:
+                items = items.filter(group=group)
+
+            if hasattr(self.model(), 'status_detail'):
+                items = items.filter(status_detail__iexact=status_detail)
 
         objects = []
 

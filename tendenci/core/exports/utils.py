@@ -3,6 +3,7 @@ import datetime
 import csv
 from StringIO import StringIO
 from django.http import HttpResponse
+from django.conf import settings
 from tendenci.core.exports.models import Export
 
 
@@ -35,15 +36,18 @@ def full_model_to_dict(instance, fields=None, exclude=None):
 
 
 def render_csv(filename, title_list, data_list):
-    """Render a csv file response"""
-    output = StringIO("")
-    #output = open('eggs.csv', 'wb')
-    csv_writer = csv.writer(output)
+    """
+    Returns .csv response
+    """
+    response = HttpResponse(mimetype='text/csv')
+    response['Content-Disposition'] = 'attachment; filename=' + filename
+
+    csv_writer = csv.writer(response)
 
     csv_writer.writerow(title_list)
 
     for row_item_list in data_list:
-        for i in range(0, len(row_item_list)):
+        for i in xrange(0, len(row_item_list)):
             if row_item_list[i]:
                 if isinstance(row_item_list[i], datetime.datetime):
                     row_item_list[i] = row_item_list[i].strftime('%Y-%m-%d %H:%M:%S')
@@ -54,20 +58,21 @@ def render_csv(filename, title_list, data_list):
                 row_item_list[i] = row_item_list[i].encode("utf-8")
         csv_writer.writerow(row_item_list)
 
-    response = HttpResponse(output.getvalue())
-    response['Content-Type'] = "application/text"
-    response['Content-Disposition'] = 'attachment; filename=' + filename
     return response
 
 
-def run_export_task(app_label, model_name, fields):
+def run_export_task(app_label, model_name, fields, memb_app=None):
     export = Export.objects.create(
         app_label=app_label,
         model_name=model_name,
+        memb_app=memb_app,
     )
-    # subprocess.Popen(['python', 'manage.py', 'run_export_task', unicode(export.pk)] + fields)
 
-    from django.core.management import call_command
-    args = [unicode(export.pk)] + fields
-    call_command('run_export_task', *args)
+    if settings.USE_SUBPROCESS:
+        subprocess.Popen(['python', 'manage.py', 'run_export_task', unicode(export.pk)] + fields)
+    else:
+        from django.core.management import call_command
+        args = [unicode(export.pk)] + fields
+        call_command('run_export_task', *args)
+
     return export.pk

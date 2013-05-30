@@ -164,7 +164,7 @@ class EventLogManager(Manager):
 
         # Action is the name of the view that is being called
         #
-        # We get it via the stack, but we filter out stacks that are named 
+        # We get it via the stack, but we filter out stacks that are named
         # 'save' or 'update_perms_and_save' to avoid getting the incorrect
         # view. We don't want to miss on a save method override or our own
         # updating. - JMO 2012-05-14
@@ -180,6 +180,9 @@ class EventLogManager(Manager):
                         event_log.action = stack[3][3]
                 else:
                     event_log.action = stack[2][3]
+
+        if event_log.application == "base":
+            event_log.application = "homepage"
 
         # If the request is not present in the kwargs, we try to find it
         # by inspecting the stack. We dive 3 levels if necessary. - JMO 2012-05-14
@@ -233,7 +236,13 @@ class EventLogManager(Manager):
                 event_log.session_id = request.COOKIES.get('sessionid', '')
 
             if hasattr(request, 'META'):
-                event_log.user_ip_address = request.META.get('REMOTE_ADDR', '')
+                # Check for HTTP_X_REAL_IP first in case we are
+                # behind a load balancer
+                event_log.user_ip_address = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
+                if "," in event_log.user_ip_address:
+                    event_log.user_ip_address = event_log.user_ip_address.split(",")[-1].replace(" ", "")
+
+                event_log.user_ip_address = event_log.user_ip_address[-15:]
                 event_log.http_referrer = request.META.get('HTTP_REFERER', '')[:255]
                 event_log.http_user_agent = request.META.get('HTTP_USER_AGENT', '')
                 event_log.request_method = request.META.get('REQUEST_METHOD', '')
@@ -247,8 +256,10 @@ class EventLogManager(Manager):
             try:
                 event_log.server_ip_address = settings.INTERNAL_IPS[0]
             except:
-                event_log.server_ip_address = gethostbyname(gethostname())
-
+                try:
+                    event_log.server_ip_address = gethostbyname(gethostname())
+                except:
+                    event_log.server_ip_address = '0.0.0.0'
             if hasattr(request, 'path'):
                 event_log.url = request.path or ''
 

@@ -21,20 +21,32 @@ def invoices_search_results_line(request, invoice):
         from django.template import TemplateDoesNotExist
         
         app_label = invoice.object_type.app_label
-        template_name = "%s/invoice_search_result_line.html" % (app_label)
+        model = invoice.object_type.model
+        # since membership app has 2 different associated invoices
+        if app_label == 'memberships' and model == 'membershipset':
+            template_name = "%s/invoice_search_result_line2.html" % (app_label)
+        else:
+            template_name = "%s/invoice_search_result_line.html" % (app_label)
 
         try:
-            search_line_display = render_to_string(template_name, {'obj':obj,
-                                                              'invoice':invoice},
-                                                            context_instance=RequestContext(request))
+            search_line_display = render_to_string(
+                template_name,
+                {'obj':obj,'invoice':invoice},
+                context_instance=RequestContext(request)
+            )
         except TemplateDoesNotExist:
             pass
 
     return {'request':request, 'invoice':invoice, 'obj':obj, 'search_line_display':search_line_display}
 
-@register.inclusion_tag("invoices/search_line_header.html")
-def invoices_search_line_header(request, invoice, obj_color):
-    return {'request':request, 'invoice':invoice, 'obj_color':obj_color}
+
+@register.inclusion_tag("invoices/search_line_header.html", takes_context=True)
+def invoices_search_line_header(context, request, invoice, obj_color):
+    context.update({'request': request,
+                   'invoice': invoice,
+                   'obj_color': obj_color})
+    return context
+
 
 @register.inclusion_tag("invoices/search-form.html", takes_context=True)
 def invoice_search(context):
@@ -52,7 +64,12 @@ def invoice_object_display(request, invoice):
         from django.template import TemplateDoesNotExist
 
         app_label = invoice.object_type.app_label
-        template_name = "%s/invoice_view_display.html" % (app_label)
+        model = invoice.object_type.model
+        # since membership app has 2 different associated invoices
+        if app_label == 'memberships' and model == 'membershipset':
+            template_name = "%s/invoice_view_display2.html" % (app_label)
+        else:
+            template_name = "%s/invoice_view_display.html" % (app_label)
         try:
             object_display = render_to_string(
                 template_name,

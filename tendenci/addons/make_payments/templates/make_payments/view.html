@@ -19,7 +19,7 @@
 <div class="make-payment-view">
 <div class="label">{% trans "Payment Amount:" %}</div><div>{{ mp.payment_amount }}</div>
 <div class="clear-left"></div>
-<div class="label">{% trans "Invoice ID:" %}</div><div><a href="{% url invoices.views.view mp.invoice_id %}">{{ mp.invoice_id }}</a></div>
+<div class="label">{% trans "Invoice ID:" %}</div><div><a href="{% url invoice.view mp.invoice_id %}">{{ mp.invoice_id }}</a></div>
 <div class="clear-left"></div>
 {% if mp.user %}
 <div class="label">{% trans "User:" %}</div><div><a href="{% url profile mp.user.username %}">{{mp.user.username }}</a></div>
@@ -33,7 +33,7 @@
 <div class="label">{% trans "Address:" %}</div><div>{{ mp.address }} {{ mp.address2 }} 
 		{{ mp.city }} {{ mp.state }} {{ mp.zip_code }} {{ mp.country }}</div>
 <div class="clear-left"></div>
-<div class="label">{% trans "Phone:" %}</div><div>{{ mp.phone }}</div>
+<div class="label">{% trans "Phone:" %}</div><div>{{ mp.phone|phonenumber }}</div>
 <div class="clear-left"></div>
 <div class="label">{% trans "Email:" %}</div><div>{{ mp.email|obfuscate_email }}</div>
 <div class="clear-left"></div>

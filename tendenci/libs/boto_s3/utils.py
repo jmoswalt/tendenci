@@ -10,6 +10,34 @@ from django.core.files.storage import default_storage
 from storages.backends.s3boto import S3BotoStorage, S3BotoStorageFile
 
 
+class StaticStorage(S3BotoStorage):
+    """
+    Storage for static files.
+    The folder is defined in settings.STATIC_S3_PATH
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs['location'] = settings.STATIC_S3_PATH
+        super(StaticStorage, self).__init__(*args, **kwargs)
+
+    def url(self, name):
+        url = super(StaticStorage, self).url(name)
+        if name.endswith('/') and not url.endswith('/'):
+            url += '/'
+        return url
+
+
+class DefaultStorage(S3BotoStorage):
+    """
+    Storage for uploaded media files.
+    The folder is defined in settings.DEFAULT_S3_PATH
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs['location'] = settings.DEFAULT_S3_PATH
+        super(DefaultStorage, self).__init__(*args, **kwargs)
+
+
 def read_media_file_from_s3(file_path):
     """
     Read a media file from S3.
@@ -28,7 +56,25 @@ def read_media_file_from_s3(file_path):
     return content
 
 
-def save_file_to_s3(file_path, dirpath=None, public=False):
+def read_theme_file_from_s3(file_path):
+    """
+    Read a theme file from S3.
+    The file_path should be the relative path in the media directory.
+
+    Example:
+    file_content = read_theme_file_from_s3('themename/templates/default.html')
+    """
+    # the DEFAULT_S3_PATH is where the media files are stored.
+    file_path = '%s/%s' % (settings.THEME_S3_PATH, unicode(file_path).lstrip('/'))
+    storage = S3BotoStorage()
+    f = S3BotoStorageFile(file_path, 'r', storage)
+    content = f.read()
+    f.close()
+
+    return content
+
+
+def save_file_to_s3(file_path, dirpath=None, public=False, dest_path=None):
     """
     Save the file to S3.
     """
@@ -43,8 +89,10 @@ def save_file_to_s3(file_path, dirpath=None, public=False):
         if not dirpath:
             dirpath = settings.ORIGINAL_THEMES_DIR
 
-        key = '%s%s' % (settings.AWS_LOCATION,
-                            file_path.replace(os.path.dirname(dirpath), ''))
+        if not dest_path:
+            dest_path = file_path.replace(os.path.dirname(dirpath), '')
+
+        key = '%s%s' % (settings.AWS_LOCATION, dest_path)
         k.key = key
         if os.path.splitext(filename)[1] == '.less':
             content_type = 'text/css'
@@ -76,6 +124,8 @@ def set_s3_file_permission(file, public=False):
                 k.set_acl('public-read')
             else:
                 k.set_acl('private')
+        else:
+            print file_path, 'does not exist.'
 
 
 def download_files_from_s3(prefix='', to_dir='', update_only=False, dry_run=False):
@@ -152,3 +202,11 @@ def download_files_from_s3(prefix='', to_dir='', update_only=False, dry_run=Fals
             else:
                 item.get_contents_to_filename(copy_to_fullpath)
                 print 'Downloaded %s' % s3_file_relative_path
+
+def delete_file_from_s3(file):
+    conn = boto.connect_s3(settings.AWS_ACCESS_KEY_ID,
+                           settings.AWS_SECRET_ACCESS_KEY)
+    b = conn.get_bucket(settings.AWS_STORAGE_BUCKET_NAME)
+    k = Key(b)
+    k.key = file
+    b.delete_key(k)

@@ -1,4 +1,5 @@
 from django.utils.translation import ugettext, ugettext_lazy as _
+from tendenci.core.base.fields import EmailVerificationField
 
 FIELD_MAX_LENGTH = 2000
 LABEL_MAX_LENGTH = 255
@@ -10,11 +11,11 @@ FIELD_TYPE_CHOICES = (
     ("BooleanField", _("Checkbox")),
     ("ChoiceField", _("Choose from a list")),
     ("MultipleChoiceField", _("Multi select")),
-    ("EmailField", _("Email")),
+    ("EmailVerificationField", _("Email")),
     ("DateField/django.forms.extras.SelectDateWidget", _("Date")),
     ("DateTimeField", _("Date/time")),
-    ("CharField/forms_builder.forms.widgets.Description", _("Description")),
-    ("CharField/forms_builder.forms.widgets.Header", _("Section Heading")),
+    ("CharField/tendenci.apps.forms_builder.forms.widgets.Description", _("Description")),
+    ("CharField/tendenci.apps.forms_builder.forms.widgets.Header", _("Section Heading")),
 )
 
 USER_FIELD_CHOICES = (

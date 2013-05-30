@@ -49,12 +49,15 @@
 				<div class="day{% if today.date == day %} today{% endif %}">
 					<div class="date-numeral"><a href="{% url event.day day.year day.month day.day %}">{{ day.day }}</a></div>
 
-					{% event_list day type as events %}
+					{% event_list day type 'single_day' as events %}
 					
 					{% if events %}
 						{% for event in events|slice:"2" %}
 							<div class="event-item" title="{{ event.type }}: {{ event }}" 
 								style="color:{{ event.type.fg_color }}; background-color:{{ event.type.bg_color }}">
+                                {% if event.priority %}
+                                <div class="event-priority"></div>
+                                {% endif %}
 								<a href="{{ event.get_absolute_url }}" 
 									class="time-stamp">{{ event.start_dt|date:"f a" }}</a>
 								<a href="{{ event.get_absolute_url }}" 
@@ -93,12 +96,12 @@
 
 				<div class="type">
 					<a style="color:{{ type.fg_color }}; background-color:{{ type.bg_color }}; border-color:{{ type.border_color }};" 
-					href="{% url event.month year month type.slug %}">{{ type }}</a>
+					href="{% url event.month year month type.slug %}?latest">{{ type }}</a>
 				</div>
 				{% else %}
 				<div class="type">
 					<a style="color:{{ type.fg_color }}; background-color:{{ type.bg_color }}; border-color:{{ type.bg_color }};" 
-					href="{% url event.month year month type.slug %}">{{ type }}</a>
+					href="{% url event.month year month type.slug %}?latest">{{ type }}</a>
 				</div>
 				{% endif %}
 			{% endfor %}

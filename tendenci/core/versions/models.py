@@ -18,7 +18,7 @@ class Version(models.Model):
     """
 
     create_dt = models.DateTimeField(_('create time'))
-    user = models.ForeignKey(User, null=True)
+    user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
     content_type = models.ForeignKey(ContentType)
     object_id = models.IntegerField(_('object id'))
     object_repr = models.CharField(_('object repr'), max_length=200)
@@ -45,7 +45,7 @@ class Version(models.Model):
             field_name = unicode(f.name)
             if field_name in data:
                 #print unicode(f.get_internal_type())
-                if unicode(f.get_internal_type()) == 'ForeignKey':
+                if unicode(f.get_internal_type()) == 'ForeignKey' or unicode(f.get_internal_type()) == 'OneToOneField':
                     obj_data[field_name + "_id"] = data[field_name]
                 elif unicode(f.get_internal_type()) == 'DateTimeField':
                     obj_data[field_name] = parse(data[field_name])

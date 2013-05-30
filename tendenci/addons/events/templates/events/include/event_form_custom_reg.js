@@ -17,8 +17,8 @@ $(document).ready(function() {
 	{% else %}
 	
 	var disable_separate_forms = function(){
-		one_or_separate_input_radios[1].disabled=true;
-	    $(one_or_saparate_input_radio_labels[1]).css({'color': '#aaa'});
+		//one_or_separate_input_radios[1].disabled=true;
+	   // $(one_or_saparate_input_radio_labels[1]).css({'color': '#aaa'});
 	}
     
     {# disable the separate custom reg form option per pricing if not already selected #}
@@ -102,4 +102,20 @@ $(document).ready(function() {
         toggle_email_reminder($this);
     });
     
+    if ($("#id_display_event_registrants:checked").length == 1) {
+        //$('fieldset.attendees .form-field:not(fieldset.attendees .form-field:first)').show();
+        $('div.id_display_registrants_to').parent().show();
+    }else {
+        //$('fieldset.attendees .form-field:not(fieldset.attendees .form-field:first)').hide();
+        $('div.id_display_registrants_to').parent().hide();
+    }
+    $('#id_display_event_registrants').click(function(){
+        if($("#id_display_event_registrants:checked").length == 1){
+            //$('fieldset.attendees .form-field:not(fieldset.attendees .form-field:first)').slideDown('fast');
+            $('div.id_display_registrants_to').parent().slideDown('fast');
+        }else{
+            //$('fieldset.attendees .form-field:not(fieldset.attendees .form-field:first)').slideUp('fast');
+            $('div.id_display_registrants_to').parent().slideUp('fast');
+        }
+    });
 });

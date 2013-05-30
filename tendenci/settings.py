@@ -2,7 +2,7 @@ import os.path
 
 # Paths
 TENDENCI_ROOT = os.path.abspath(os.path.dirname(__file__))
-
+SITE_ADDONS_PATH = ''
 
 DEBUG = False
 TEMPLATE_DEBUG = DEBUG
@@ -79,6 +79,7 @@ MIDDLEWARE_CLASSES = (
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'tendenci.libs.swfupload.middleware.SSLRedirectMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'johnny.middleware.LocalStoreClearMiddleware',
     'johnny.middleware.QueryCacheMiddleware',
@@ -128,6 +129,8 @@ AVATAR_GRAVATAR_BACKUP = False
 AVATAR_DEFAULT_URL = STATIC_URL + 'images/icons/default-user-80.jpg'
 AUTO_GENERATE_AVATAR_SIZES = (128, 80, 48,)
 
+# default image url (relative to the static folder)
+DEFAULT_IMAGE_URL = 'images/default-photo.jpg'
 
 # TEMPLATE DIRECTORIES AND PROCESSORS
 
@@ -179,9 +182,13 @@ INSTALLED_APPS = (
     'captcha',
     'south',
     'tastypie',
+    'tendenci.libs.model_report',
 
     'tendenci.apps.entities',
     'tendenci.core.base',
+    'tendenci.core.site_settings',
+    'tendenci.apps.contributions',
+    'tendenci.apps.search',
     'tendenci.apps.notifications',
     'tendenci.apps.registration',
     'tendenci.core.registry',
@@ -209,6 +216,10 @@ INSTALLED_APPS = (
     'tendenci.addons.memberships',
     'tendenci.addons.corporate_memberships',
     'tendenci.addons.locations',
+    'tendenci.addons.industries',
+    'tendenci.addons.regions',
+    'tendenci.addons.educations',
+    'tendenci.addons.careers',
     'tendenci.core.site_settings',
     'tendenci.addons.make_payments',
     'tendenci.apps.accountings',
@@ -220,7 +231,6 @@ INSTALLED_APPS = (
     'tendenci.core.versions',
     'tendenci.core.event_logs',
     'tendenci.core.categories',
-    'tendenci.apps.contributions',
     'tendenci.apps.theme_editor',
     'tendenci.libs.styled_forms',
     'tendenci.core.newsletters',
@@ -237,12 +247,13 @@ INSTALLED_APPS = (
     'tendenci.core.theme',
     'tendenci.apps.discounts',
     'tendenci.apps.metrics',
-    'tendenci.apps.search',
     'tendenci.apps.navs',
     'tendenci.addons.tendenci_guide',
     'tendenci.core.exports',
-    'tendenci.core.ics',
+    'tendenci.addons.events.ics',
     'tendenci.core.imports',
+    'tendenci.core.handler404',
+    'tendenci.apps.reports',
     # celery task system, must stay at the bottom of installed apps
     'djkombu',
     'djcelery',
@@ -270,6 +281,7 @@ THEMES_DIR = os.path.join(TENDENCI_ROOT, 'themes')
 
 # ORIGINAL_THEMES_DIR is used when USE_S3_STORAGE==True
 ORIGINAL_THEMES_DIR = THEMES_DIR
+USE_S3_THEME = False
 
 # -------------------------------------- #
 #    TINYMCE
@@ -339,7 +351,12 @@ BROKER_PORT = 5672
 BROKER_USER = "guest"
 BROKER_PASSWORD = "guest"
 BROKER_VHOST = "/"
-CELERY_IS_ACTIVE = True
+CELERY_IS_ACTIVE = False
+
+# USE_SUBPROCESS - in places like exports and long-running
+# processes that can timeout, subprocess will be used
+# if this setting is True
+USE_SUBPROCESS = True
 
 # --------------------------------------#
 # Hackstack Search
@@ -354,6 +371,8 @@ HAYSTACK_SOLR_TIMEOUT = 20
 HAYSTACK_INDEX_LIMITS = {
     'event_logs': 3000,
 }
+
+INDEX_FILE_CONTENT = False
 
 # --------------------------------------#
 # PAYMENT GATEWAYS
@@ -375,6 +394,11 @@ AUTHNET_CIM_API_URL = "https://api.authorize.net/xml/v1/request.api"
 PAYFLOWLINK_PARTNER = ''
 PAYPAL_MERCHANT_LOGIN = ''
 PAYFLOWLINK_POST_URL = 'https://payflowlink.paypal.com'
+
+# PAYPAL
+PAYPAL_POST_URL = 'https://www.paypal.com/cgi-bin/webscr'
+# for test mode
+# PAYPAL_POST_URL = 'https://www.sandbox.paypal.com/cgi-bin/webscr'
 
 # --------------------------------------#
 # RSS

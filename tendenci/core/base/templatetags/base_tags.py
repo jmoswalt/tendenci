@@ -11,6 +11,7 @@ from django.template import Library, Node, Variable, TemplateSyntaxError
 from django.contrib.auth.models import User
 from django.core.urlresolvers import reverse
 from django.core.cache import cache
+from django.conf import settings
 
 from tendenci.core.base.template_tags import parse_tag_kwargs
 from tendenci.core.base.utils import url_exists
@@ -448,25 +449,38 @@ def nowhitespace(parser, token):
     nodelist = parser.parse(('endnowhitespace',))
     parser.delete_first_token()
     return NoWhiteSpaceNode(nodelist)
-    
-    
+
+
 class PhotoImageURL(Node):
     def __init__(self, photo, *args, **kwargs):
         self.size = kwargs.get("size", "100x100")
         self.crop = kwargs.get("crop", False)
+        self.constrain = kwargs.get("constrain", False)
         self.quality = kwargs.get("quality", 90)
         self.photo = Variable(photo)
 
     def render(self, context):
         photo = self.photo.resolve(context)
 
+        # We can't crop and constrain, so we need
+        # to pick one if both are passed
+        if self.crop and self.constrain:
+            self.constrain = False
+
         # return empty unicode string
         if not photo.pk:
-            return unicode()
+            return "%s%s" % (getattr(settings, 'STATIC_URL'), getattr(settings, 'DEFAULT_IMAGE_URL'))
+
+        cache_key = generate_image_cache_key(file=str(photo.pk), size=self.size, pre_key="photo", crop=self.crop, unique_key=str(photo.pk), quality=self.quality, constrain=self.constrain)
+        cached_image_url = cache.get(cache_key)
+        if cached_image_url:
+            return cached_image_url
 
         args = [photo.pk, self.size]
         if self.crop:
             args.append("crop")
+        if self.constrain:
+            args.append("constrain")
         if self.quality:
             args.append(self.quality)
         url = reverse('photo.size', args=args)
@@ -483,7 +497,7 @@ def photo_image_url(parser, token):
 
         {% list_photos as photos user=user limit=3 %}
         {% for photo in photos %}
-            <img src="{% photo_image_url photo size=100x100 crop=True %}" />
+            <img src="{% photo_image_url photo size=100x100 crop=True constrain=True %}" />
         {% endfor %}
     """
     args, kwargs = [], {}
@@ -495,6 +509,8 @@ def photo_image_url(parser, token):
             kwargs["size"] = bit.split("=")[1]
         if "crop=" in bit:
             kwargs["crop"] = bool(bit.split("=")[1])
+        if "constrain=" in bit:
+            kwargs["constrain"] = bool(bit.split("=")[1])
         if "quality=" in bit:
             kwargs["quality"] = bit.split("=")[1]
 
@@ -510,6 +526,7 @@ class ImageURL(Node):
         self.size = kwargs.get("size", None)
         self.crop = kwargs.get("crop", False)
         self.quality = kwargs.get("quality", None)
+        self.constrain = kwargs.get("constrain", None)
         self.file = Variable(file)
 
     def render(self, context):
@@ -517,32 +534,40 @@ class ImageURL(Node):
 
         if file and file.pk:
 
-            cache_key = generate_image_cache_key(file=str(file.id), size=self.size, pre_key=FILE_IMAGE_PRE_KEY, crop=self.crop, unique_key=str(file.id), quality=self.quality)
+            cache_key = generate_image_cache_key(file=str(file.id), size=self.size, pre_key=FILE_IMAGE_PRE_KEY, crop=self.crop, unique_key=str(file.id), quality=self.quality, constrain=self.constrain)
             cached_image_url = cache.get(cache_key)
             if cached_image_url:
                 return cached_image_url
 
             args = [file.pk]
             if self.size:
-                args.append(self.size)
+                try:
+                    size = Variable(self.size)
+                    size = size.resolve(context)
+                except:
+                    size = self.size
+                args.append(size)
             if self.crop:
                 args.append("crop")
+            if self.constrain:
+                args.append("constrain")
             if self.quality:
                 args.append(self.quality)
             url = reverse('file', args=args)
             return url
-        # return empty unicode string
-        return unicode('')
+
+        # return the default image url
+        return "%s%s" % (getattr(settings, 'STATIC_URL'), getattr(settings, 'DEFAULT_IMAGE_URL'))
 
 
 @register.tag
 def image_url(parser, token):
     """
-    Creates a url for a photo that can be resized, cropped, and have quality reduced.
+    Creates a url for a photo that can be resized, cropped, constrianed, and have quality reduced.
     
     Usage::
 
-        {% image_url file [options][size=100x100] [crop=True] [quality=90] %}
+        {% image_url file [options][size=100x100] [crop=True] [constrain=True] [quality=90] %}
 
     Options include:
     
@@ -551,7 +576,9 @@ def image_url(parser, token):
         ``crop``
            Whether or not to crop the image. **Default: False**
         ``quality``
-           The quality of the rendered image. Use smaller for faster loading. **Default: 90**
+           The quality of the rendered image. Use smaller for faster loading. Must be used with ``size`` **Default: 90**
+        ``constrain``
+            The size of the image will be constrained instead of cropped
 
     Example::
 
@@ -566,6 +593,8 @@ def image_url(parser, token):
             kwargs["size"] = bit.split("=")[1]
         if "crop=" in bit:
             kwargs["crop"] = bool(bit.split("=")[1])
+        if "constrain=" in bit:
+            kwargs["constrain"] = bool(bit.split("=")[1])
         if "quality=" in bit:
             kwargs["quality"] = bit.split("=")[1]
 

@@ -10,14 +10,17 @@ from django.utils.translation import ugettext_lazy as _
 from django.utils import simplejson as json
 
 from tendenci.core.base.http import Http403
+from tendenci.core.site_settings.utils import get_setting
+from tendenci.core.site_settings.models import Setting
 from tendenci.core.perms.utils import has_perm
 from tendenci.core.event_logs.models import EventLog
 from tendenci.core.theme.utils import get_theme, theme_choices as theme_choice_list
+from tendenci.libs.boto_s3.utils import delete_file_from_s3
 from tendenci.apps.theme_editor.models import ThemeFileVersion
 from tendenci.apps.theme_editor.forms import FileForm, ThemeSelectForm, UploadForm
 from tendenci.apps.theme_editor.utils import get_dir_list, get_file_list, get_file_content, get_all_files_list
 from tendenci.apps.theme_editor.utils import qstr_is_file, qstr_is_dir, copy
-from tendenci.apps.theme_editor.utils import handle_uploaded_file, app_templates
+from tendenci.apps.theme_editor.utils import handle_uploaded_file, app_templates, ThemeInfo
 
 DEFAULT_FILE = 'templates/homepage.html'
 
@@ -29,10 +32,11 @@ def edit_file(request, form_class=FileForm, template_name="theme_editor/index.ht
         raise Http403
 
     selected_theme = request.GET.get("theme_edit", get_theme())
-    if settings.USE_S3_STORAGE:
-        theme_root = os.path.join(settings.ORIGINAL_THEMES_DIR, selected_theme)
+    original_theme_root = os.path.join(settings.ORIGINAL_THEMES_DIR, selected_theme)
+    if settings.USE_S3_THEME:
+        theme_root = os.path.join(settings.THEME_S3_PATH, selected_theme)
     else:
-        theme_root = os.path.join(settings.THEMES_DIR, selected_theme)
+        theme_root = os.path.join(settings.ORIGINAL_THEMES_DIR, selected_theme)
 
     # get the default file and clean up any input
     default_file = request.GET.get("file", DEFAULT_FILE)
@@ -100,19 +104,11 @@ def edit_file(request, form_class=FileForm, template_name="theme_editor/index.ht
     if request.method == "POST":
         file_form = form_class(request.POST)
         if file_form.is_valid():
-            if file_form.save(request, default_file, ROOT_DIR=theme_root):
+            if file_form.save(request, default_file, ROOT_DIR=theme_root, ORIG_ROOT_DIR=original_theme_root):
                 message = "Successfully updated %s" % current_file
                 message_status = messages.SUCCESS
 
-                log_defaults = {
-                    'event_id': 1110000,
-                    'event_data': '%s updated by %s' % (current_file, request.user),
-                    'description': 'theme file edited',
-                    'user': request.user,
-                    'request': request,
-                    'source': 'theme_editor',
-                }
-                EventLog.objects.log(**log_defaults)
+                EventLog.objects.log()
             else:
                 message = "Cannot update"
                 message_status = messages.WARNING
@@ -222,7 +218,7 @@ def copy_to_theme(request, app=None):
         chosen_file = chosen_file.replace('///', '/')
         chosen_file = chosen_file.replace('//', '/')
 
-    root = os.path.join(settings.PROJECT_ROOT, "templates")
+    root = os.path.join(settings.TENDENCI_ROOT, "templates")
     if app:
         root = app_templates[app]
 
@@ -235,16 +231,8 @@ def copy_to_theme(request, app=None):
 
     messages.add_message(request, messages.SUCCESS, ('Successfully copied %s/%s to the the theme root' % (current_dir, chosen_file)))
 
-    log_defaults = {
-        'event_id': 1110200,
-        'event_data': '%s copied by %s' % (full_filename, request.user),
-        'description': 'theme file copied to theme',
-        'user': request.user,
-        'request': request,
-        'source': 'theme_editor',
-    }
-    EventLog.objects.log(**log_defaults)
-    return redirect('theme_editor.original_templates')
+    EventLog.objects.log()
+    return redirect('theme_editor.editor')
 
 
 def delete_file(request):
@@ -281,18 +269,14 @@ def delete_file(request):
 
     os.remove(full_filename)
 
+    if settings.USE_S3_STORAGE:
+        delete_file_from_s3(file=settings.AWS_LOCATION + '/' + 'themes/' + get_theme() + '/' + current_dir + chosen_file)
+
     messages.add_message(request, messages.SUCCESS, ('Successfully deleted %s/%s.' % (current_dir, chosen_file)))
 
-    log_defaults = {
-        'event_id': 1110300,
-        'event_data': '%s deleted by %s' % (full_filename, request.user),
-        'description': 'theme file deleted',
-        'user': request.user,
-        'request': request,
-        'source': 'theme_editor',
-    }
-    EventLog.objects.log(**log_defaults)
+    EventLog.objects.log()
     return redirect('theme_editor.editor')
+
 
 def upload_file(request):
 
@@ -301,6 +285,7 @@ def upload_file(request):
 
     if request.method == 'POST':
         form = UploadForm(request.POST, request.FILES)
+
         if form.is_valid():
             upload = request.FILES['upload']
             file_dir = form.cleaned_data['file_dir']
@@ -312,23 +297,42 @@ def upload_file(request):
                 return HttpResponseRedirect('/theme-editor/editor')
             else:
                 handle_uploaded_file(upload, file_dir)
-                response = {
-                    "success": True
-                }
                 messages.add_message(request, messages.SUCCESS, ('Successfully uploaded %s.' % (upload.name)))
 
-                log_defaults = {
-                    'event_id': 1110100,
-                    'event_data': '%s uploaded by %s' % (full_filename, request.user),
-                    'description': 'theme file upload',
-                    'user': request.user,
-                    'request': request,
-                    'source': 'theme_editor',
-                }
-                EventLog.objects.log(**log_defaults)
+                EventLog.objects.log()
 
                 return HttpResponseRedirect('/theme-editor/editor/')
+
+        else:  # not valid
+            messages.add_message(request, messages.ERROR, form.errors)
+
     else:
         form = UploadForm()
 
-    return render_to_response(context_instance=RequestContext(request))
+    return HttpResponseRedirect('/theme-editor/editor/')
+
+
+@login_required
+def theme_picker(request, template_name="theme_editor/theme_picker.html"):
+    if not request.user.profile.is_superuser:
+        raise Http403
+
+    themes = []
+    for theme in theme_choice_list():
+        theme_info = ThemeInfo(theme)
+        themes.append(theme_info)
+
+    if request.method == "POST":
+        selected_theme = request.POST.get('theme')
+        theme_setting = Setting.objects.get(name='theme')
+        theme_setting.set_value(selected_theme)
+        theme_setting.save()
+        messages.add_message(request, messages.SUCCESS, "Your theme has been changed to %s." % selected_theme.title())
+
+    current_theme = get_setting('module', 'theme_editor', 'theme')
+
+    return render_to_response(template_name, {
+        'themes': themes,
+        'current_theme': current_theme,
+        'theme_choices': theme_choice_list(),
+    }, context_instance=RequestContext(request))

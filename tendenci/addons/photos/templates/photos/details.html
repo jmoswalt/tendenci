@@ -6,6 +6,7 @@
 {% load photo_tags %}
 {% load pagination_tags %}
 {% load smart_if %}
+{% load base_tags %}
 
 {% block meta_description %}{{ photo.title|striptags|truncatewords:20 }}{% endblock %}
 {% block meta_keywords %}{{ photo.meta_keywords }}{% endblock %}
@@ -33,6 +34,7 @@
         <div class="photo-traverse">
             <ul>
 				{% if photo_prev_url %}<li><a id="photo-prev" href="{{ photo_prev_url }}">&laquo; {% trans "Prev" %}</a></li>{% endif %}
+                {% if photo_set_count %}<li>({{ photo_position }} {% trans "of" %} {{ photo_set_count }})</li>{% endif %}
                 {% if photo_next_url %}<li><a id="photo-next" href="{{ photo_next_url }}">{% trans "Next" %} &raquo;</a></li>
                 {% else %}
                     {% if photo_first_url %}<li><a id="photo-next" href="{{ photo_first_url }}">{% trans "Go to First" %} &raquo;</a></li>{% endif %}
@@ -44,21 +46,21 @@
             <div class="photo">
                 </a>
                 <br>
-                <div about="{{ photo.get_medium_640_url }}" 
+                <div about="{% photo_image_url photo size=640x640 constrain=True %}" 
                     xmlns:dct="http://purl.org/dc/terms/"
                     xmlns:cc="http://creativecommons.org/ns#">
 
                     {% if photo_next_url %}
                     <a id="image-photo-next" href="{{ photo_next_url }}">
-                        <img src="{{ photo.get_medium_640_url }}" alt="{{ photo.title }}" /></a>
+                        <img src="{% photo_image_url photo size=640x640 constrain=True %}" alt="{{ photo.title }}" /></a>
                     {% else %}
-                    <img src="{{ photo.get_medium_640_url }}" alt="{{ photo.title }}" />
+                    <img src="{% photo_image_url photo size=640x640 constrain=True %}" alt="{{ photo.title }}" />
                     {% endif %}
 
                     <br />
                     <div id="photo-rights">
                     <span property="dct:title">{{ photo.title }}</span>
-                    by <a href="{{ photo.creator.get_absolute_url }}"
+                    uploaded by <a href="{{ photo.creator.get_absolute_url }}"
                         property="cc:attributionName" 
                         rel="cc:attributionURL dct:creator">{{ photo.creator.get_full_name }}</a>.
                     {% if photo.get_license == photo.default_license %}
@@ -73,7 +75,7 @@
             </div>
         </div>
         <div class="photo-caption-wrap">
-            {{ photo.caption|safe }}
+            {{ photo.caption|safe|urlize }}
         </div>
         <div class="hr"></div>
         <div class="photo-options">

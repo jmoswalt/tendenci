@@ -1,3 +1,4 @@
+import random
 import hashlib
 from datetime import datetime, timedelta
 from operator import or_
@@ -13,6 +14,7 @@ from django.db.models import Q
 from tendenci.core.base.template_tags import ListNode, parse_tag_kwargs
 from tendenci.core.site_settings.utils import get_setting
 from tendenci.core.perms.utils import get_query_filters
+from tendenci.apps.user_groups.models import Group
 
 from tendenci.addons.events.models import Event, Registrant, Type, RegConfPricing
 from tendenci.addons.events.utils import get_pricing, registration_earliest_time
@@ -33,9 +35,13 @@ def event_options(context, user, event):
 
 @register.inclusion_tag("events/nav.html", takes_context=True)
 def event_nav(context, user, event=None):
+    display_attendees = False
+    if event:
+        display_attendees = event.can_view_registrants(user)
     context.update({
         "nav_object": event,
         "user": user,
+        "can_view_attendees": display_attendees,
         "today": datetime.today()
     })
     return context
@@ -63,15 +69,20 @@ def registrant_search(context, event=None):
     return context
 
 
+@register.inclusion_tag("events/registrants/global-search-form.html", takes_context=True)
+def global_registrant_search(context):
+    return context
+
+
 @register.inclusion_tag('events/reg8n/registration_pricing.html', takes_context=True)
 def registration_pricing_and_button(context, event, user):
-    limit = event.registration_configuration.limit
+    limit = event.get_limit()
     spots_taken = 0
     spots_left = limit - spots_taken
     registration = event.registration_configuration
 
     pricing = registration.get_available_pricings(user, is_strict=False)
-    pricing = pricing.order_by('display_order', '-price')
+    pricing = pricing.order_by('position', '-price')
     
     reg_started = registration_has_started(event, pricing=pricing)
     reg_ended = registration_has_ended(event, pricing=pricing)
@@ -115,7 +126,7 @@ class EventListNode(Node):
         self.type_slug = Variable(type_slug)
         self.ordering = ordering
         if ordering:
-            self.ordering = ordering.replace("'",'')
+            self.ordering = ordering.replace("'", '')
         self.context_var = context_var
 
     def render(self, context):
@@ -139,7 +150,7 @@ class EventListNode(Node):
         end_dt = day
 
         filters = get_query_filters(context['user'], 'events.view_event')
-        events = Event.objects.filter(filters).filter(start_dt__lte=start_dt, end_dt__gte=end_dt).distinct()
+        events = Event.objects.filter(filters).filter(start_dt__lte=start_dt, end_dt__gte=end_dt).distinct().extra(select={'hour': 'extract( hour from start_dt )'}).extra(select={'minute': 'extract( minute from start_dt )'})
 
         if type:
             events = events.filter(type=type)
@@ -147,8 +158,14 @@ class EventListNode(Node):
         if weekday == 'Sun' or weekday == 'Sat':
             events = events.filter(on_weekend=True)
 
-        events = events.order_by(self.ordering or 'start_dt')
-        
+        if self.ordering == "single_day":
+            events = events.order_by('-priority', 'hour', 'minute')
+        else:
+            if self.ordering:
+                events = events.order_by(self.ordering)
+            else:
+                events = events.order_by('-priority', 'start_dt')
+
         context[self.context_var] = events
         return ''
 
@@ -176,7 +193,7 @@ def event_list(parser, token):
         day = bits[1]
         type_slug = bits[2]
         context_var = bits[4]
-        
+
     if len(bits) == 6:
         day = bits[1]
         type_slug = bits[2]
@@ -250,6 +267,7 @@ class ListEventsNode(ListNode):
         limit = 3
         order = 'next_upcoming'
         event_type = ''
+        group = u''
 
         randomize = False
 
@@ -311,6 +329,18 @@ class ListEventsNode(ListNode):
             except:
                 event_type = self.kwargs['type']
 
+        if 'group' in self.kwargs:
+            try:
+                group = Variable(self.kwargs['group'])
+                group = unicode(group.resolve(context))
+            except:
+                group = self.kwargs['group']
+
+            try:
+                group = int(group)
+            except:
+                group = None
+
         filters = get_query_filters(user, 'events.view_event')
         items = Event.objects.filter(filters)
         if user.is_authenticated():
@@ -333,6 +363,9 @@ class ListEventsNode(ListNode):
             tag_query = reduce(or_, tag_queries)
             items = items.filter(tag_query)
 
+        if hasattr(self.model, 'group') and group:
+            items = items.filter(group=group)
+
         objects = []
 
         # if order is not specified it sorts by relevance
@@ -340,12 +373,19 @@ class ListEventsNode(ListNode):
             if order == "next_upcoming":
                 # Removed seconds and microseconds so we can cache the query better
                 now = datetime.now().replace(second=0, microsecond=0)
-                items = items.filter(start_dt__gt = now)
+                items = items.filter(start_dt__gt=now)
                 items = items.order_by("start_dt")
             elif order == "current_and_upcoming":
                 now = datetime.now().replace(second=0, microsecond=0)
                 items = items.filter(Q(start_dt__gt=now) | Q(end_dt__gt=now))
                 items = items.order_by("start_dt")
+            elif order == "current_and_upcoming_by_hour":
+                now = datetime.now().replace(second=0, microsecond=0)
+                today = datetime.now().replace(second=0, hour=0, minute=0, microsecond=0)
+                tomorrow = today + timedelta(days=1)
+                items = items.filter(Q(start_dt__lte=tomorrow) & Q(end_dt__gte=today)).extra(select={'hour': 'extract( hour from start_dt )'}).extra(select={'minute': 'extract( minute from start_dt )'}).extra(where=["extract( hour from start_dt ) >= %s"], params=[now.hour])
+                items = items.distinct()
+                items = items.order_by('hour', 'minute')
             else:
                 items = items.order_by(order)
 
@@ -383,6 +423,8 @@ def list_events(parser, token):
            The type of the event.
         ``tags``
            The tags required on items to be included.
+        ``group``
+           The group id associated with items to be included.
         ``random``
            Use this with a value of true to randomize the items included.
 

@@ -1,6 +1,72 @@
 from django.template import Node, Variable, Library
+from tendenci.core.base.utils import tcurrency
 
 register = Library()
+
+
+@register.inclusion_tag(
+        "corporate_memberships/applications/render_corpmembership_field.html")
+def render_corpmembership_field(request, field_obj,
+                                corpprofile_form,
+                            corpmembership_form):
+    if field_obj.field_type == "section_break":
+        field = None
+    else:
+        field_name = field_obj.field_name
+        if field_name in corpprofile_form.field_names \
+                and not field_obj.display_only:
+            field = corpprofile_form[field_name]
+        elif field_name in corpmembership_form.field_names \
+                and not field_obj.display_only:
+            field = corpmembership_form[field_name]
+        else:
+            field = None
+
+    return {'request': request, 'field_obj': field_obj,
+            'field': field}
+
+
+@register.simple_tag
+def individual_pricing_desp(corp_membership):
+    """
+    Return the description of pricing for the individual memberships
+    joining under this corp_membership.
+    """
+    description = ''
+    if corp_membership:
+        corporate_type = corp_membership.corporate_membership_type
+        membership_type = corporate_type.membership_type
+        admin_fee = membership_type.admin_fee
+        if not admin_fee:
+            admin_fee = 0
+
+        if not (membership_type.price + admin_fee):
+            membership_price = 'free'
+        else:
+            membership_price = tcurrency(membership_type.price)
+            if membership_type.admin_fee:
+                membership_price = '%s + %s' % (
+                                    membership_price,
+                                    tcurrency(membership_type.admin_fee))
+
+        threshold = corporate_type.apply_threshold
+        threshold_limit = corporate_type.individual_threshold
+        threshold_price = corporate_type.individual_threshold_price
+        if not threshold_price:
+            threshold_price = 'free'
+        else:
+            threshold_price = tcurrency(threshold_price)
+
+        if threshold and threshold_limit > 0:
+            description += 'first %d %s, ' % (
+                                    threshold_limit,
+                                    threshold_price
+                                    )
+            description += 'then %s ' % membership_price
+        else:
+            description += '%s ' % membership_price
+    return description
+
 
 @register.inclusion_tag("corporate_memberships/render_corp_field.html")
 def render_corp_field(request, field_obj, form):
@@ -28,6 +94,7 @@ def corpmemb_nav(context, user, corp_memb=None):
     })
     return context
 
+
 @register.inclusion_tag("corporate_memberships/options.html", takes_context=True)
 def corpmemb_options(context, user, corp_memb):
     context.update({
@@ -35,6 +102,12 @@ def corpmemb_options(context, user, corp_memb):
         "user": user
     })
     return context
+
+
+@register.inclusion_tag("corporate_memberships/applications/search_form.html", takes_context=True)
+def corpmembership_search(context):
+    return context
+
 
 @register.inclusion_tag("corporate_memberships/search_form.html", takes_context=True)
 def corp_memb_search(context):

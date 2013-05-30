@@ -3,9 +3,14 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.utils.translation import ugettext_lazy as _
 
+from tendenci.apps.accountings.models import Acct, AcctEntry, AcctTran
+from tendenci.apps.accountings.utils import (make_acct_entries_initial,
+                                             make_acct_entries_closing,
+                                             make_acct_entries_closing_reversing)
+
 class MakePayment(models.Model):
     guid = models.CharField(max_length=50)
-    user = models.ForeignKey(User, null=True)
+    user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
     first_name = models.CharField(max_length=100, null=True)
     last_name = models.CharField(max_length=100, null=True)
     company = models.CharField(max_length=50, default='', blank=True, null=True)
@@ -24,9 +29,9 @@ class MakePayment(models.Model):
     payment_method = models.CharField(max_length=50, default='cc')
     invoice_id = models.IntegerField(blank=True, null=True)
     create_dt = models.DateTimeField(auto_now_add=True)
-    creator = models.ForeignKey(User, null=True,  related_name="make_payment_creator")
+    creator = models.ForeignKey(User, null=True,  related_name="make_payment_creator", on_delete=models.SET_NULL)
     creator_username = models.CharField(max_length=50, null=True)
-    owner = models.ForeignKey(User, null=True, related_name="make_payment_owner")
+    owner = models.ForeignKey(User, null=True, related_name="make_payment_owner", on_delete=models.SET_NULL)
     owner_username = models.CharField(max_length=50, null=True)
     status_detail = models.CharField(max_length=50, default='estimate')
     status = models.BooleanField(default=True)
@@ -75,26 +80,7 @@ class MakePayment(models.Model):
                 self.comments,
             )
         return
-    
-    def make_acct_entries(self, user, inv, amount, **kwargs):
-        """
-        Make the accounting entries for the general sale
-        """
-        from tendenci.apps.accountings.models import Acct, AcctEntry, AcctTran
-        from tendenci.apps.accountings.utils import make_acct_entries_initial, make_acct_entries_closing
-        
-        ae = AcctEntry.objects.create_acct_entry(user, 'invoice', inv.id)
-        if not inv.is_tendered:
-            make_acct_entries_initial(user, ae, amount)
-        else:
-            # payment has now been received
-            make_acct_entries_closing(user, ae, amount)
-            
-            # #CREDIT makepayment SALES
-            acct_number = self.get_acct_number()
-            acct = Acct.objects.get(account_number=acct_number)
-            AcctTran.objects.create_acct_tran(user, ae, acct, amount*(-1)) 
-            
+
     def get_acct_number(self, discount=False):
         if discount:
             return 466700

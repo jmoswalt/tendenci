@@ -1,6 +1,7 @@
 import os
 import datetime
 import re
+import csv
 from django.contrib.auth.models import User
 from django.db import models
 from django.http import HttpResponse
@@ -52,17 +53,19 @@ def get_user_import_settings(request, id):
         return d
 
     d['file_name'] = (request.session[id]).get('file_name', u'')
-    d['interactive'] = request.session[id].get('interactive', u'')
-    d['override'] = request.session[id].get('override', u'')
+    d['interactive'] = request.session[id].get('interactive', False)
+    d['override'] = request.session[id].get('override', False)
     d['key'] = request.session[id].get('key', u'')
     d['group'] = request.session[id].get('group', u'')
     d['clear_group_membership'] = request.session[id].get(
-                                'clear_group_membership', u''
+                                'clear_group_membership', False
                                 )
 
-    d['interactive'] = d.get('interactive') or False
-    d['override'] = d.get('override') or False
-    d['clear_group_membership'] = d.get('clear_group_membership') or False
+    if d['override'] == "False":
+        d['override'] = False
+
+    if d['interactive'] == "False":
+        d['interactive'] = False
 
     if d['override']:
         d['str_update'] = 'Override All Fields'
@@ -74,10 +77,14 @@ def get_user_import_settings(request, id):
 
 def render_excel(filename, title_list, data_list, file_extension='.xls'):
     if file_extension == '.csv':
-        str_out = ','.join(title_list)
+        response = HttpResponse(mimetype='text/csv')
+        response['Content-Disposition'] = 'attachment; filename=' + filename
+        csv_writer = csv.writer(response)
+
+        csv_writer.writerow(title_list)
 
         for row_item_list in data_list:
-            for i in range(0, len(row_item_list)):
+            for i in xrange(0, len(row_item_list)):
                 if row_item_list[i]:
                     if isinstance(row_item_list[i], datetime.datetime):
                         row_item_list[i] = row_item_list[i].strftime(
@@ -91,9 +98,10 @@ def render_excel(filename, title_list, data_list, file_extension='.xls'):
                         row_item_list[i] = row_item_list[i].strftime(
                             '%H:%M:%S'
                             )
-            str_out += ','.join(row_item_list)
+                if isinstance(row_item_list[i], basestring):
+                    row_item_list[i] = row_item_list[i].encode("utf-8")
 
-        content_type = "application/text"
+            csv_writer.writerow(row_item_list)
     else:
         import StringIO
         output = StringIO.StringIO()
@@ -111,7 +119,7 @@ def render_excel(filename, title_list, data_list, file_extension='.xls'):
                     cell_value_is_date = False
                     if isinstance(cell_value, datetime.datetime):
                         cell_value = xlrd.xldate.xldate_from_datetime_tuple((
-                            cell_value.year, cell_value.month, 
+                            cell_value.year, cell_value.month,
                             cell_value.day, cell_value.hour,
                             cell_value.minute,
                             cell_value.second), 0)
@@ -141,11 +149,10 @@ def render_excel(filename, title_list, data_list, file_extension='.xls'):
         export_wb.save(output)
         output.seek(0)
         str_out = output.getvalue()
-        content_type = 'application/vnd.ms-excel'
+        response = HttpResponse(str_out)
+        response['Content-Type']  = 'application/vnd.ms-excel'
+        response['Content-Disposition'] = 'attachment; filename=' + filename
 
-    response = HttpResponse(str_out)
-    response['Content-Type'] = content_type
-    response['Content-Disposition'] = 'attachment; filename=' + filename
     return response
 
 
@@ -179,7 +186,7 @@ def user_import_process(request, setting_dict, preview=True, id=''):
     else:
         finish = data_dict_list_len
 
-    for r in range(start, finish):
+    for r in xrange(start, finish):
         user_object_dict = {}
         if not preview:
             user_import_dict = {}
@@ -255,7 +262,7 @@ def user_import_process(request, setting_dict, preview=True, id=''):
 
             setting_dict['is_completed'] = False
 
-            for r in range(start, finish):
+            for r in xrange(start, finish):
                 # remove those already processed rows
                 data_dict_list.remove(data_dict_list[0])
 
@@ -342,6 +349,7 @@ def do_user_import(request, user, user_object_dict, setting_dict):
 
     # loop through user properties; truncate at max_length
     for key, value in user.__dict__.items():
+        max_length = 90
         try:
             max_length = User._meta.get_field_by_name(key)[0].max_length
         except FieldDoesNotExist:
@@ -413,6 +421,10 @@ def get_unique_username(user):
     p = re.compile(r'[^\w.@+-]+', re.IGNORECASE)
     user.username = p.sub('', user.username)
 
+    # the maximum length of username is 30
+    # truncate to 27 to leave some room to append more if needed.
+    if len(user.username) > 27:
+        user.username = user.username[:27]
     # check if this username already exists
     users = User.objects.filter(username__istartswith=user.username)
 
@@ -456,7 +468,7 @@ def get_header_list(file_path):
     header_list = []
     book = xlrd.open_workbook(file_path)
     sheet = book.sheet_by_index(0)
-    for col in range(0, sheet.ncols):
+    for col in xrange(0, sheet.ncols):
         col_item = sheet.cell_value(rowx=0, colx=col)
         header_list.append(col_item)
     return header_list
@@ -474,9 +486,9 @@ def get_header_list_from_content(file_content, file_name):
         else:
             book = xlrd.open_workbook(file_contents=file_content)
             nsheets = book.nsheets
-            for i in range(0, nsheets):
+            for i in xrange(0, nsheets):
                 sh = book.sheet_by_index(i)
-                for c in range(0, sh.ncols):
+                for c in xrange(0, sh.ncols):
                     col_item = sh.cell_value(rowx=0, colx=c)
                     header_list.append(col_item)
     return header_list
@@ -512,7 +524,7 @@ def extract_from_excel(file_path):
             for key in item.keys():
                 if key in field_type_dict and \
                 field_type_dict[key] == 'DateTimeField':
-                    item[key] = dparser.parser(item[key])
+                    item[key] = dparser.parse(item[key])
             item['ROW_NUM'] = r + 1
             data_list.append(item)
             r += 1
@@ -522,18 +534,18 @@ def extract_from_excel(file_path):
         nrows = book.sheet_by_index(0).nrows
 
         # get the fields from the first row
-        for i in range(0, nsheets):
+        for i in xrange(0, nsheets):
             sh = book.sheet_by_index(i)
-            for c in range(0, sh.ncols):
+            for c in xrange(0, sh.ncols):
                 col_item = sh.cell_value(rowx=0, colx=c)
                 fields.append(smart_str(col_item))
 
         # get the data - skip the first row
-        for r in  range(1, nrows):
+        for r in  xrange(1, nrows):
             row = []
-            for i in range(0, nsheets):
+            for i in xrange(0, nsheets):
                 sh = book.sheet_by_index(i)
-                for c in range(0, sh.ncols):
+                for c in xrange(0, sh.ncols):
                     cell = sh.cell(r, c)
                     cell_value = cell.value
                     if cell.ctype == xlrd.XL_CELL_DATE:

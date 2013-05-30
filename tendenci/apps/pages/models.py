@@ -42,6 +42,11 @@ class BasePage(TendenciBaseModel):
         if not self.guid:
             self.guid = str(uuid.uuid1())
         super(BasePage, self).save(*args, **kwargs)
+        if self.header_image:
+            if self.is_public():
+                set_s3_file_permission(self.header_image.file, public=True)
+            else:
+                set_s3_file_permission(self.header_image.file, public=False)
 
     def __unicode__(self):
         return self.title
@@ -99,6 +104,10 @@ class Page(BasePage):
     @models.permalink
     def get_absolute_url(self):
         return ("page", [self.slug])
+
+    @models.permalink
+    def get_version_url(self, hash):
+        return ("page.version", [hash])
 
 
 class HeaderImage(File):

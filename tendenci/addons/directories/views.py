@@ -4,15 +4,19 @@ from PIL import Image
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect
 from django.template import RequestContext
-from django.http import HttpResponseRedirect, Http404, HttpResponse
+from django.http import HttpResponseRedirect, HttpResponse
 from django.core.urlresolvers import reverse
 from django.contrib import messages
 from django.template.defaultfilters import slugify
 from django.conf import settings
+from django.utils import simplejson
+from django.views.decorators.csrf import csrf_exempt
 
 from tendenci.core.site_settings.utils import get_setting
 from tendenci.core.base.http import Http403
 from tendenci.core.base.views import file_display
+from tendenci.core.categories.models import Category
+from tendenci.core.perms.decorators import is_enabled
 from tendenci.core.perms.utils import (get_notice_recipients,
     has_perm, has_view_perm, get_query_filters, update_perms_and_save)
 from tendenci.core.event_logs.models import EventLog
@@ -22,13 +26,14 @@ from tendenci.core.theme.shortcuts import themed_response as render_to_response
 from tendenci.core.exports.utils import run_export_task
 
 from tendenci.addons.directories.models import Directory, DirectoryPricing
-from tendenci.addons.directories.forms import DirectoryForm, DirectoryPricingForm
-from tendenci.addons.directories.utils import directory_set_inv_payment
+from tendenci.addons.directories.forms import DirectoryForm, DirectoryPricingForm, DirectoryRenewForm
+from tendenci.addons.directories.utils import directory_set_inv_payment, is_free_listing
 from tendenci.apps.notifications import models as notification
 from tendenci.core.base.utils import send_email_notification
 from tendenci.addons.directories.utils import resize_s3_image
 
 
+@is_enabled('directories')
 def details(request, slug=None, template_name="directories/view.html"):
     if not slug: return HttpResponseRedirect(reverse('directories'))
     directory = get_object_or_404(Directory, slug=slug)
@@ -41,28 +46,42 @@ def details(request, slug=None, template_name="directories/view.html"):
     else:
         raise Http403
 
+
+@is_enabled('directories')
 def search(request, template_name="directories/search.html"):
-    get = dict(request.GET)
-    query = get.pop('q', [])
-    get.pop('page', None)  # pop page query string out; page ruins pagination
-    query_extra = ['%s:%s' % (k,v[0]) for k,v in get.items() if v[0].strip()]
-    query = ' '.join(query)
-    if query_extra:
-        query = '%s %s' % (''.join(query), ' '.join(query_extra))
+    query = request.GET.get('q')
+    category = request.GET.get('category')
+    subcategory = request.GET.get('sub_category')
 
     if get_setting('site', 'global', 'searchindex') and query:
+        if category:
+            try:
+                query = '%s category:%s' % (query, Category.objects.get(id=int(category)).name)
+            except (Category.DoesNotExist, ValueError):
+                pass
+
+        if subcategory:
+            try:
+                query = '%s subcategory:%s' % (query, Category.objects.get(id=int(subcategory)).name)
+            except (Category.DoesNotExist, ValueError):
+                pass
+
         directories = Directory.objects.search(query, user=request.user).order_by('headline_exact')
     else:
         filters = get_query_filters(request.user, 'directories.view_directory')
         directories = Directory.objects.filter(filters).distinct()
         if not request.user.is_anonymous():
             directories = directories.select_related()
-    
+
+        if category:
+            directories = directories.filter(categories__category=category)
+        if subcategory:
+            directories = directories.filter(categories__parent=subcategory)
+
         directories = directories.order_by('headline')
 
-
     EventLog.objects.log()
-    category = request.GET.get('category')
+
     try:
         category = int(category)
     except:
@@ -70,17 +89,17 @@ def search(request, template_name="directories/search.html"):
     categories, sub_categories = Directory.objects.get_categories(category=category)
 
     return render_to_response(template_name, {
-        'directories':directories,
-        'categories':categories,
-        'sub_categories':sub_categories,
-        }, 
-        context_instance=RequestContext(request))
+        'directories': directories,
+        'categories': categories,
+        'sub_categories': sub_categories,
+    }, context_instance=RequestContext(request))
 
 
 def search_redirect(request):
     return HttpResponseRedirect(reverse('directories'))
 
 
+@is_enabled('directories')
 def print_view(request, slug, template_name="directories/print-view.html"):
     directory = get_object_or_404(Directory, slug=slug)    
     if has_view_perm(request.user,'directories.view_directory',directory):
@@ -90,8 +109,9 @@ def print_view(request, slug, template_name="directories/print-view.html"):
             context_instance=RequestContext(request))
     else:
         raise Http403
-    
 
+
+@is_enabled('directories')
 @login_required
 def add(request, form_class=DirectoryForm, template_name="directories/add.html"):
     can_add_active = has_perm(request.user,'directories.add_directory')
@@ -102,7 +122,12 @@ def add(request, form_class=DirectoryForm, template_name="directories/add.html")
                (request.user.profile.is_member and get_setting('module', 'directories', 'directoriesrequiresmembership'))
                ]):
         raise Http403
-     
+
+    pricings = DirectoryPricing.objects.filter(status=True)
+    if not pricings and has_perm(request.user, 'directories.add_directorypricing'):
+        messages.add_message(request, messages.WARNING, 'You need to add a %s Pricing before you can add %s.' % (get_setting('module', 'directories', 'label_plural'),get_setting('module', 'directories', 'label')))
+        return HttpResponseRedirect(reverse('directory_pricing.add'))     
+
     require_payment = get_setting('module', 'directories', 'directoriesrequirespayment')
     
     form = form_class(request.POST or None, request.FILES or None, user=request.user)
@@ -111,12 +136,21 @@ def add(request, form_class=DirectoryForm, template_name="directories/add.html")
         del form.fields['payment_method']
         del form.fields['list_type']
 
-    if request.method == "POST":   
-        if form.is_valid():           
+    if request.method == "POST":
+        if require_payment:
+            is_free = is_free_listing(request.user,
+                               request.POST.get('pricing', 0),
+                               request.POST.get('list_type'))
+            if is_free:
+                del form.fields['payment_method']
+
+        if form.is_valid():
             directory = form.save(commit=False)
             pricing = form.cleaned_data['pricing']
-            
-            if directory.payment_method: 
+
+            if require_payment and is_free:
+                directory.payment_method = 'paid - cc'
+            if directory.payment_method:
                 directory.payment_method = directory.payment_method.lower()
             if not directory.requested_duration:
                 directory.requested_duration = 30
@@ -134,13 +168,22 @@ def add(request, form_class=DirectoryForm, template_name="directories/add.html")
                 # set the expiration date
                 directory.expiration_dt = directory.activation_dt + timedelta(days=directory.requested_duration)
 
+            # We set the logo to None temporarily because we need
+            # the PK when we save to get the filepath of the file
+            logo = directory.logo
+            directory.logo = None
+
+            directory = update_perms_and_save(request, form, directory)
+
+            # directory now has a pk, so we can reassign the logo
+            # and resave
+            directory.logo = logo
+
             if directory.logo:
                 directory.logo.file.seek(0)
-            # update all permissions and save the model
-            directory = update_perms_and_save(request, form, directory)
-            
-            # resize the image that has been uploaded
-            if directory.logo:
+
+                directory.save(log=False)
+
                 if settings.USE_S3_STORAGE:
                     resize_s3_image(directory.logo.name)
                 else:
@@ -169,15 +212,32 @@ def add(request, form_class=DirectoryForm, template_name="directories/add.html")
                     
             if directory.payment_method.lower() in ['credit card', 'cc']:
                 if directory.invoice and directory.invoice.balance > 0:
-                    return HttpResponseRedirect(reverse('payments.views.pay_online', args=[directory.invoice.id, directory.invoice.guid])) 
+                    return HttpResponseRedirect(reverse('payment.pay_online', args=[directory.invoice.id, directory.invoice.guid])) 
             if can_add_active:  
                 return HttpResponseRedirect(reverse('directory', args=[directory.slug])) 
             else:
                 return HttpResponseRedirect(reverse('directory.thank_you'))             
 
-    return render_to_response(template_name, {'form':form}, 
+    return render_to_response(template_name,
+                              {'form': form,
+                               'require_payment': require_payment},
         context_instance=RequestContext(request))
-    
+
+
+@csrf_exempt
+@login_required
+def query_price(request):
+    """
+    Get the price for user with the selected list type.
+    """
+    pricing_id = request.POST.get('pricing_id', 0)
+    list_type = request.POST.get('list_type', '')
+    pricing = get_object_or_404(DirectoryPricing, pk=pricing_id)
+    price = pricing.get_price_for_user(request.user, list_type=list_type)
+    return HttpResponse(simplejson.dumps({'price': price}))
+
+
+@is_enabled('directories')
 @login_required
 def edit(request, id, form_class=DirectoryForm, template_name="directories/edit.html"):
     directory = get_object_or_404(Directory, pk=id)
@@ -229,12 +289,12 @@ def edit(request, id, form_class=DirectoryForm, template_name="directories/edit.
         context_instance=RequestContext(request))
 
 
+@is_enabled('directories')
 @login_required
 def edit_meta(request, id, form_class=MetaForm, template_name="directories/edit-meta.html"):
-
-    # check permission
     directory = get_object_or_404(Directory, pk=id)
-    if not has_perm(request.user,'directories.change_directory',directory):
+
+    if not has_perm(request.user, 'directories.change_directory', directory):
         raise Http403
 
     defaults = {
@@ -261,6 +321,7 @@ def edit_meta(request, id, form_class=MetaForm, template_name="directories/edit-
         context_instance=RequestContext(request))
 
 
+@is_enabled('directories')
 def logo_display(request, id):
     directory = get_object_or_404(Directory, pk=id)
 
@@ -272,6 +333,7 @@ def logo_display(request, id):
     return file_display(request, directory.logo.name)
 
 
+@is_enabled('directories')
 @login_required
 def delete(request, id, template_name="directories/delete.html"):
     directory = get_object_or_404(Directory, pk=id)
@@ -301,6 +363,7 @@ def delete(request, id, template_name="directories/delete.html"):
         raise Http403
 
 
+@is_enabled('directories')
 @login_required
 def pricing_add(request, form_class=DirectoryPricingForm, template_name="directories/pricing-add.html"):
     if has_perm(request.user,'directories.add_directorypricing'):
@@ -319,7 +382,9 @@ def pricing_add(request, form_class=DirectoryPricingForm, template_name="directo
             context_instance=RequestContext(request))
     else:
         raise Http403
-    
+
+
+@is_enabled('directories')
 @login_required
 def pricing_edit(request, id, form_class=DirectoryPricingForm, template_name="directories/pricing-edit.html"):
     directory_pricing = get_object_or_404(DirectoryPricing, pk=id)
@@ -339,6 +404,7 @@ def pricing_edit(request, id, form_class=DirectoryPricingForm, template_name="di
         context_instance=RequestContext(request))
 
 
+@is_enabled('directories')
 @login_required
 def pricing_view(request, id, template_name="directories/pricing-view.html"):
     directory_pricing = get_object_or_404(DirectoryPricing, id=id)
@@ -350,7 +416,9 @@ def pricing_view(request, id, template_name="directories/pricing-view.html"):
             context_instance=RequestContext(request))
     else:
         raise Http403
-    
+
+
+@is_enabled('directories')
 @login_required
 def pricing_delete(request, id, template_name="directories/pricing-delete.html"):
     directory_pricing = get_object_or_404(DirectoryPricing, pk=id)
@@ -370,6 +438,8 @@ def pricing_delete(request, id, template_name="directories/pricing-delete.html")
     return render_to_response(template_name, {'directory_pricing': directory_pricing}, 
         context_instance=RequestContext(request))
 
+
+@is_enabled('directories')
 def pricing_search(request, template_name="directories/pricing-search.html"):
     directory_pricing = DirectoryPricing.objects.filter(status=True).order_by('duration')
     EventLog.objects.log()
@@ -377,6 +447,8 @@ def pricing_search(request, template_name="directories/pricing-search.html"):
     return render_to_response(template_name, {'directory_pricings':directory_pricing}, 
         context_instance=RequestContext(request))
 
+
+@is_enabled('directories')
 @login_required
 def pending(request, template_name="directories/pending.html"):
     can_view_directories = has_perm(request.user, 'directories.view_directory')
@@ -390,7 +462,9 @@ def pending(request, template_name="directories/pending.html"):
 
     return render_to_response(template_name, {'directories': directories},
             context_instance=RequestContext(request))
-    
+
+
+@is_enabled('directories')
 @login_required
 def approve(request, id, template_name="directories/approve.html"):
     can_view_directories = has_perm(request.user, 'directories.view_directory')
@@ -440,7 +514,9 @@ def approve(request, id, template_name="directories/approve.html"):
 
 def thank_you(request, template_name="directories/thank-you.html"):
     return render_to_response(template_name, {}, context_instance=RequestContext(request))
-    
+
+
+@is_enabled('directories')
 @login_required
 def export(request, template_name="directories/export.html"):
     """Export Directories"""
@@ -496,3 +572,75 @@ def export(request, template_name="directories/export.html"):
         
     return render_to_response(template_name, {
     }, context_instance=RequestContext(request))
+
+
+@is_enabled('directories')
+def renew(request, id, form_class=DirectoryRenewForm, template_name="directories/renew.html"):
+    can_add_active = has_perm(request.user,'directories.add_directory')
+    require_approval = get_setting('module', 'directories', 'renewalrequiresapproval')
+    directory = get_object_or_404(Directory, pk=id)
+    
+    if not has_perm(request.user,'directories.change_directory', directory) or not request.user == directory.creator:
+        raise Http403
+    
+    # pop payment fields if not required
+    require_payment = get_setting('module', 'directories', 'directoriesrequirespayment')
+    form = form_class(request.POST or None, request.FILES or None, instance=directory, user=request.user)
+    if not require_payment:
+        del form.fields['payment_method']
+        del form.fields['list_type']
+    
+    if request.method == "POST":
+        if form.is_valid():           
+            directory = form.save(commit=False)
+            pricing = form.cleaned_data['pricing']
+            
+            if directory.payment_method: 
+                directory.payment_method = directory.payment_method.lower()
+            if not directory.requested_duration:
+                directory.requested_duration = 30
+            if not directory.list_type:
+                directory.list_type = 'regular'
+            
+            if not directory.slug:
+                directory.slug = '%s-%s' % (slugify(directory.headline), Directory.objects.count())
+            
+            if not can_add_active and require_approval:
+                directory.status = True
+                directory.status_detail = 'pending'
+            else:
+                directory.activation_dt = datetime.now()
+                # set the expiration date
+                directory.expiration_dt = directory.activation_dt + timedelta(days=directory.requested_duration)
+                # mark renewal as not sent for new exp date
+                directory.renewal_notice_sent = False
+            # update all permissions and save the model
+            directory = update_perms_and_save(request, form, directory)             
+                        
+            # create invoice
+            directory_set_inv_payment(request.user, directory, pricing)
+
+            messages.add_message(request, messages.SUCCESS, 'Successfully renewed %s' % directory)
+            
+            # send notification to administrators
+            # get admin notice recipients
+            recipients = get_notice_recipients('module', 'directories', 'directoryrecipients')
+            if recipients:
+                if notification:
+                    extra_context = {
+                        'object': directory,
+                        'request': request,
+                    }
+                    notification.send_emails(recipients,'directory_renewed', extra_context)
+                    
+            if directory.payment_method.lower() in ['credit card', 'cc']:
+                if directory.invoice and directory.invoice.balance > 0:
+                    return HttpResponseRedirect(reverse('payments.views.pay_online', args=[directory.invoice.id, directory.invoice.guid])) 
+            if can_add_active:  
+                return HttpResponseRedirect(reverse('directory', args=[directory.slug])) 
+            else:
+                return HttpResponseRedirect(reverse('directory.thank_you'))  
+        
+    
+    return render_to_response(template_name, {'directory':directory, 'form':form}, 
+        context_instance=RequestContext(request))
